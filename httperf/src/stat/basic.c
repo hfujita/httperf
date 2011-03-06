@@ -59,6 +59,35 @@
 #define BIN_WIDTH	1e-3
 #define NUM_BINS	((u_int) (MAX_LIFETIME / BIN_WIDTH))
 
+enum Conn_Result {
+    CONN_UNFINISHED,
+    CONN_SUCCEEDED,
+    CONN_FAILED,
+};
+
+static const char *result_to_string (enum Conn_Result result)
+{
+	switch (result) {
+	case CONN_UNFINISHED:
+		return "UNFINISHED";
+	case CONN_SUCCEEDED:
+		return "SUCCEEDED";
+	case CONN_FAILED:
+		return "FAILED";
+	default:
+		return "?";
+	}
+}
+
+struct Conn_Stats
+{
+	enum Conn_Result result;
+	Time time_connect_start;
+	Time time_connected;
+	Time time_connection_close;
+	int  local_port;
+};
+
 static struct {
 	u_int           num_conns_issued;	/* total # of connections * issued */
 	u_int           num_replies[6];	/* completion count per status class */
@@ -104,10 +133,18 @@ static struct {
 
 	u_int           conn_lifetime_hist[NUM_BINS];	/* histogram of
 													 * connection lifetimes */
+	struct Conn_Stats *conn_stats;
+    int num_max_stats;
 } basic;
 
 static u_int    num_active_conns;
 static u_int    num_replies;	/* # of replies received in this interval */
+
+static int
+stats_enabled (void)
+{
+  return param.conn_stats;
+}
 
 static void
 perf_sample(Event_Type et, Object * obj, Any_Type reg_arg, Any_Type call_arg)
@@ -139,7 +176,12 @@ perf_sample(Event_Type et, Object * obj, Any_Type reg_arg, Any_Type call_arg)
 static void
 conn_timeout(Event_Type et, Object * obj, Any_Type reg_arg, Any_Type call_arg)
 {
+	Conn *c = (Conn *) obj;
+
 	assert(et == EV_CONN_TIMEOUT);
+
+	if (stats_enabled ())
+		basic.conn_stats[c->basic.conn_id].result = CONN_FAILED;
 
 	++basic.num_client_timeouts;
 }
@@ -147,10 +189,14 @@ conn_timeout(Event_Type et, Object * obj, Any_Type reg_arg, Any_Type call_arg)
 static void
 conn_fail(Event_Type et, Object * obj, Any_Type reg_arg, Any_Type call_arg)
 {
+	Conn *c = (Conn *) obj;
 	static int      first_time = 1;
 	int             err = call_arg.i;
 
 	assert(et == EV_CONN_FAILED);
+
+	if (stats_enabled ())
+		basic.conn_stats[c->basic.conn_id].result = CONN_FAILED;
 
 	switch (err) {
 #ifdef __linux__
@@ -199,11 +245,40 @@ static void
 conn_connecting(Event_Type et, Object * obj, Any_Type reg_arg, Any_Type c_arg)
 {
 	Conn           *s = (Conn *) obj;
+	Time now;
+	int id;
 
 	assert(et == EV_CONN_CONNECTING && object_is_conn(s));
 
-	s->basic.time_connect_start = timer_now();
-	++basic.num_conns_issued;
+	now = timer_now ();
+	s->basic.time_connect_start = now;
+	id = basic.num_conns_issued++;
+
+	if (stats_enabled ()) {
+		if (id >= basic.num_max_stats) {
+			fprintf (stderr, "id is bigger than basic.num_max_stats!\n");
+			exit (1);
+		}
+		s->basic.conn_id = id;
+		basic.conn_stats[id].time_connect_start
+			= basic.conn_stats[id].time_connected = now;
+	}
+}
+
+static void
+conn_close (Event_Type et, Object *obj, Any_Type reg_arg,
+			Any_Type call_arg)
+{
+	Conn *s = (Conn *) obj;
+	struct Conn_Stats *stats;
+
+	assert (et == EV_CONN_CLOSE && object_is_conn (s) && stats_enabled ());
+
+	stats = &basic.conn_stats[s->basic.conn_id];
+	stats->time_connection_close = timer_now ();
+	stats->local_port = s->myport;
+	if (stats->result == CONN_UNFINISHED)
+		stats->result = CONN_SUCCEEDED;
 }
 
 static void
@@ -211,9 +286,13 @@ conn_connected(Event_Type et, Object * obj, Any_Type reg_arg,
 			   Any_Type call_arg)
 {
 	Conn           *s = (Conn *) obj;
+	Time now;
 
 	assert(et == EV_CONN_CONNECTED && object_is_conn(s));
-	basic.conn_connect_sum += timer_now() - s->basic.time_connect_start;
+	now = timer_now ();
+	basic.conn_connect_sum += now - s->basic.time_connect_start;
+	if (stats_enabled ())
+		basic.conn_stats[s->basic.conn_id].time_connected = now;
 	++basic.num_connects;
 }
 
@@ -243,6 +322,13 @@ conn_destroyed(Event_Type et, Object * obj, Any_Type reg_arg, Any_Type c_arg)
 		++basic.conn_lifetime_hist[bin];
 	}
 	--num_active_conns;
+}
+
+static int
+calc_max_num_connections(void)
+{
+	/* TODO: think seriously for several patterns */
+	return param.num_conns;
 }
 
 static void
@@ -308,9 +394,18 @@ static void
 init(void)
 {
 	Any_Type        arg;
+	int             max_conns = calc_max_num_connections();
 
 	basic.conn_lifetime_min = DBL_MAX;
 	basic.reply_rate_min = DBL_MAX;
+	if (stats_enabled()) {
+		basic.conn_stats = calloc(sizeof(struct Conn_Stats), max_conns);
+		if (basic.conn_stats == NULL) {
+			fprintf (stderr, "Cannot allocate memory\n");
+			exit (1);
+		}
+		basic.num_max_stats = max_conns;
+    }
 
 	arg.l = 0;
 	event_register_handler(EV_PERF_SAMPLE, perf_sample, arg);
@@ -319,11 +414,46 @@ init(void)
 	event_register_handler(EV_CONN_NEW, conn_created, arg);
 	event_register_handler(EV_CONN_CONNECTING, conn_connecting, arg);
 	event_register_handler(EV_CONN_CONNECTED, conn_connected, arg);
+	if (stats_enabled ())
+		event_register_handler(EV_CONN_CLOSE, conn_close, arg);
 	event_register_handler(EV_CONN_DESTROYED, conn_destroyed, arg);
 	event_register_handler(EV_CALL_SEND_START, send_start, arg);
 	event_register_handler(EV_CALL_SEND_STOP, send_stop, arg);
 	event_register_handler(EV_CALL_RECV_START, recv_start, arg);
 	event_register_handler(EV_CALL_RECV_STOP, recv_stop, arg);
+}
+
+static void
+dump_stats (void)
+{
+	int i;
+	FILE *fp = stdout;
+
+	if (param.conn_stats_fname) {
+		fp = fopen(param.conn_stats_fname, "wt");
+		if (fp == NULL) {
+			fprintf(stderr, "Cannot open file for connection statistics: %s\n",
+					param.conn_stats_fname);
+			return;
+		}
+    }
+
+	fprintf(fp, "id\tLport\tResult\tTstart\tTconn\tTtotal\n");
+
+	for (i = 0; i < basic.num_conns_issued; i++) {
+		Time time_start = basic.conn_stats[0].time_connect_start;
+		struct Conn_Stats *stats = &basic.conn_stats[i];
+		Time start     = stats->time_connect_start - time_start;
+		Time connected = stats->time_connected - stats->time_connect_start;
+		Time total     = stats->time_connection_close - stats->time_connect_start;
+
+		fprintf(fp, "%d\t%5d\t%s\t%.1f\t%.1f\t%.1f\n",
+				i, stats->local_port, result_to_string (stats->result),
+				start*1000.0, connected*1000.0, total*1000.0);
+    }
+
+	if (param.conn_stats_fname)
+		fclose(fp);
 }
 
 static void
@@ -346,6 +476,9 @@ dump(void)
 		total_replies += basic.num_replies[i];
 
 	delta = test_time_stop - test_time_start;
+
+	if (stats_enabled ())
+		dump_stats ();
 
 	if (verbose > 1) {
 		printf("\nConnection lifetime histogram (time in ms):\n");

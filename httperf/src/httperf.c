@@ -114,6 +114,7 @@ static struct option longopts[] = {
 	{"burst-length", required_argument, &param.burst_len, 0},
 	{"client", required_argument, (int *) &param.client, 0},
 	{"close-with-reset", no_argument, &param.close_with_reset, 1},
+	{"conn-stats", required_argument, &param.conn_stats, 1},
 	{"debug", required_argument, 0, 'd'},
 	{"failure-status", required_argument, &param.failure_status, 0},
 	{"help", no_argument, 0, 'h'},
@@ -175,7 +176,7 @@ usage(void)
 	       "\t[--think-timeout X] [--timeout X] [--verbose] [--version]\n"
 	       "\t[--wlog y|n,file] [--wsess N,N,X] [--wsesslog N,X,file]\n"
 	       "\t[--wset N,X]\n"
-	       "\t[--use-timer-cache]\n", prog_name);
+	       "\t[--use-timer-cache] [--conn-stats]\n", prog_name);
 }
 
 void
@@ -848,6 +849,9 @@ main(int argc, char **argv)
 					fputc('\n', stderr);
 					exit(1);
 				}
+			} else if (flag == &param.conn_stats) {
+				if (optarg)
+					param.conn_stats_fname = optarg;
 			}
 			break;
 
@@ -1095,6 +1099,11 @@ main(int argc, char **argv)
 			printf(" --wset=%u,%.3f",
 			       param.wset.num_files,
 			       param.wset.target_miss_rate);
+	}
+	if (param.conn_stats) {
+		printf(" --conn-stats");
+		if (param.conn_stats_fname)
+			printf("=%s", param.conn_stats_fname);
 	}
 	printf("\n");
 

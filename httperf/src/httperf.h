@@ -121,6 +121,8 @@ typedef struct Cmdline_Params
     int use_timer_cache;
     const char *additional_header;	/* additional request header(s) */
     const char *method;	/* default call method */
+    int conn_stats;     /* detailed connection statistics */
+    const char *conn_stats_fname; /* Output file name for conn stats (optional) */
     struct
       {
 	u_int id;
