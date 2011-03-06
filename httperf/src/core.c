@@ -1121,9 +1121,17 @@ core_loop(void)
 	Conn      *conn;
  
 	while (running) {
-	    struct timeval  tv = select_timeout;
+		Time  next_tick;
+		struct timeval  tv;
 
-	    timer_tick();
+	    next_tick = timer_tick();
+		if (next_tick > 0 && running) {
+			tv.tv_sec  = next_tick;
+			tv.tv_usec = (next_tick - tv.tv_sec) * 1e6;
+		} else {
+			tv.tv_sec  = 0;
+			tv.tv_usec = 0;
+		}
 
 	    readable = rdfds;
 	    writable = wrfds;
