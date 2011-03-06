@@ -44,7 +44,7 @@ void     timer_free_all(void);
 /*
  * Needs to be called at least once every TIMER_INTERVAL: 
  */
-void     timer_tick(void);
+Time     timer_tick(void);
 
 struct Timer   *timer_schedule(Timer_Callback timeout, Any_Type arg,
 			       Time delay);

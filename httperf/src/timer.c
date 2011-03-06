@@ -44,6 +44,7 @@
 #define NUM_TIMERS 25
 
 static Time     now;
+static Time     next_tick;
 
 struct Timer {
 	Time            time_started;
@@ -180,10 +181,14 @@ timer_has_expired(Any_Type a)
 	 * Only expire currently processing timers 
 	 */
 	if (t->has_expired == false) {
-		if (t->time_started + t->timeout_delay < timer_now()) {
+		Time expire_at = t->time_started + t->timeout_delay;
+		if (expire_at < timer_now()) {
 			t->has_expired = true;
 			(*t->timeout_callback) (t, t->timer_subject);
 			return true;
+		} else {
+			if (expire_at < next_tick)
+				next_tick = expire_at;
 		}
 	}
 
@@ -206,13 +211,17 @@ timer_deactivate(Any_Type a)
  * Checks for timers which have had their timeout value pass and executes their
  * callback function.  The timer is then removed from the active timer list
  * and then enqueued back into the passive timer queue
+ * Returns the interval (in seconds) between the next timer expiration.
  */
-void
+Time
 timer_tick(void)
 {
 	now = timer_now_forced();
+	next_tick = now + 1.0; /* TODO: wake up at least once in one second */
 	list_for_each(active_timers, &timer_has_expired);
 	list_remove_if_true(active_timers, &timer_deactivate);
+
+	return next_tick - now;
 }
 
 /*
