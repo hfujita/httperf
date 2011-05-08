@@ -1211,17 +1211,9 @@ void
 core_loop(void)
 {
 	while (running) {
-		Time  next_tick;
-		struct timeval  tv;
+	    struct timeval  tv = select_timeout;
 
-	    next_tick = timer_tick();
-		if (next_tick > 0 && running) {
-			tv.tv_sec  = next_tick;
-			tv.tv_usec = (next_tick - tv.tv_sec) * 1e6;
-		} else {
-			tv.tv_sec  = 0;
-			tv.tv_usec = 0;
-		}
+	    timer_tick();
 
 		event_loopexit(&tv);
 		(void) event_loop(EVLOOP_ONCE);
