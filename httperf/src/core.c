@@ -1145,8 +1145,14 @@ core_close(Conn * conn)
 	if (sd >= 0) {
 		close(sd);
 		sd_to_conn[sd] = 0;
+		/*
+		  conn_read_* requires conn->sd to be effective,
+		  so re-initialize it here
+		 */
+		conn->sd = sd;
 		conn_read_clear(conn);
 		conn_write_clear(conn);
+		conn->sd = -1;
 	}
 	if (conn->myport > 0)
 		port_put(conn->myport);
