@@ -423,13 +423,19 @@ init(void)
 	event_register_handler(EV_CALL_RECV_STOP, recv_stop, arg);
 }
 
+static int conn_stats_extfile(const char *fname)
+{
+	return fname && strcmp(fname, "-");
+}
+
 static void
 dump_stats (void)
 {
 	int i;
 	FILE *fp = stdout;
+	Time lat_max = 0;
 
-	if (param.conn_stats_fname) {
+	if (conn_stats_extfile(param.conn_stats_fname)) {
 		fp = fopen(param.conn_stats_fname, "wt");
 		if (fp == NULL) {
 			fprintf(stderr, "Cannot open file for connection statistics: %s\n",
@@ -447,12 +453,16 @@ dump_stats (void)
 		Time connected = stats->time_connected - stats->time_connect_start;
 		Time total     = stats->time_connection_close - stats->time_connect_start;
 
+		lat_max = total > lat_max ? total : lat_max;
+
 		fprintf(fp, "%d\t%5d\t%s\t%.1f\t%.1f\t%.1f\n",
 				i, stats->local_port, result_to_string (stats->result),
 				start*1000.0, connected*1000.0, total*1000.0);
     }
 
-	if (param.conn_stats_fname)
+	fprintf(stdout, "\nTotal latency [ms]: max %.1f\n", lat_max*1000.0);
+
+	if (conn_stats_extfile(param.conn_stats_fname))
 		fclose(fp);
 }
 
